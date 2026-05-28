@@ -23,12 +23,12 @@ User Traffic (PCAP) → [DPI Engine] → Filtered Output (PCAP)
 ```
 packet_analyzer/
 ├── main.py                  ← CLI entry point
-├── dpi_engine.py            ← Main orchestrator (port of main_working.cpp / dpi_mt.cpp)
+├── dpi_engine.py            ← Main orchestrator
 ├── dpi_types.py             ← Data structures: FiveTuple, Flow, AppType, RawPacket
-├── pcap_reader.py           ← PCAP file reader & writer (port of pcap_reader.cpp)
-├── packet_parser.py         ← Ethernet / IPv4 / TCP / UDP parser (port of packet_parser.cpp)
-├── sni_extractor.py         ← TLS SNI + HTTP Host extraction (port of sni_extractor.cpp)
-├── rule_manager.py          ← IP / app / domain blocking rules (port of rule_manager.h)
+├── pcap_reader.py           ← PCAP file reader & writer
+├── packet_parser.py         ← Ethernet / IPv4 / TCP / UDP parser
+├── sni_extractor.py         ← TLS SNI + HTTP Host extraction
+├── rule_manager.py          ← IP / app / domain blocking rules
 ├── generate_test_pcap.py    ← Generates a realistic test PCAP
 └── test_dpi.pcap            ← Pre-generated sample traffic
 ```
@@ -37,7 +37,7 @@ packet_analyzer/
 
 ## Prerequisites
 
-- Python **3.10+** (uses `match`-compatible type hints and `dataclasses`)
+- Python **3.10+**
 - No third-party libraries required — pure standard library
 
 ---
@@ -48,10 +48,10 @@ packet_analyzer/
 
 ```bash
 python generate_test_pcap.py
-# → creates test_dpi.pcap with 57 packets across 18 flows
+# creates test_dpi.pcap with 57 packets across 18 flows
 ```
 
-### 2. Run the DPI engine (no rules)
+### 2. Run without any blocking (analyze only)
 
 ```bash
 python main.py test_dpi.pcap output.pcap
@@ -60,26 +60,30 @@ python main.py test_dpi.pcap output.pcap
 ### 3. Run with blocking rules
 
 ```bash
-# Block YouTube and TikTok by app type
-python main.py test_dpi.pcap output.pcap \
-    --block-app YOUTUBE \
-    --block-app TIKTOK
+# Block by app
+python main.py test_dpi.pcap output.pcap --block-app YOUTUBE
+
+# Block multiple apps
+python main.py test_dpi.pcap output.pcap --block-app YOUTUBE --block-app TIKTOK
 
 # Block a specific source IP
-python main.py test_dpi.pcap output.pcap \
-    --block-ip 192.168.1.50
+python main.py test_dpi.pcap output.pcap --block-ip 192.168.1.50
 
 # Block by domain substring
-python main.py test_dpi.pcap output.pcap \
-    --block-domain facebook \
-    --block-domain tiktok
+python main.py test_dpi.pcap output.pcap --block-domain facebook
 
 # Combine all rule types
-python main.py test_dpi.pcap output.pcap \
-    --block-app YOUTUBE \
-    --block-app NETFLIX \
-    --block-ip 192.168.1.50 \
-    --block-domain tiktok
+python main.py test_dpi.pcap output.pcap --block-app YOUTUBE --block-app TIKTOK --block-ip 192.168.1.50 --block-domain facebook
+```
+
+---
+
+## Available App Names
+
+```
+YOUTUBE  FACEBOOK  INSTAGRAM  TIKTOK   NETFLIX   AMAZON
+GOOGLE   GITHUB    TWITTER    DISCORD  REDDIT    WIKIPEDIA
+MICROSOFT  APPLE   CLOUDFLARE  TWITCH  HTTP  HTTPS  DNS
 ```
 
 ---
@@ -120,15 +124,13 @@ python main.py test_dpi.pcap output.pcap \
   YOUTUBE (BLOCKED)    6   10.5%  ██░░░░░░░░░░░░░░░░░░
   TIKTOK  (BLOCKED)    4    7.0%  █░░░░░░░░░░░░░░░░░░░
   DNS                  4    7.0%  █░░░░░░░░░░░░░░░░░░░
-  ...
 ──────────────────────────────────────────────────────────────────
   DETECTED DOMAINS / SNIs
 
-  www.youtube.com                          → YOUTUBE        ✗ BLOCKED
-  www.tiktok.com                           → TIKTOK         ✗ BLOCKED
-  www.google.com                           → GOOGLE         ✓
-  www.facebook.com                         → FACEBOOK       ✓
-  ...
+  www.youtube.com          → YOUTUBE    ✗ BLOCKED
+  www.tiktok.com           → TIKTOK     ✗ BLOCKED
+  www.google.com           → GOOGLE     ✓
+  www.facebook.com         → FACEBOOK   ✓
 ══════════════════════════════════════════════════════════════════
 ```
 
@@ -136,7 +138,7 @@ python main.py test_dpi.pcap output.pcap \
 
 ## How It Works
 
-### Packet journey (step by step)
+### Packet journey
 
 ```
 Raw PCAP bytes
@@ -151,8 +153,8 @@ ParsedPacket  ← Ethernet / IPv4 / TCP / UDP headers decoded
 Flow (per-connection state: sni, app_type, blocked flag, counters)
      │
      ▼  sni_extractor.py
-SNI string  ←  TLS Client Hello payload parsed byte-by-byte
-               OR HTTP "Host:" header for plaintext HTTP
+SNI string  ← TLS Client Hello parsed byte-by-byte
+              OR HTTP "Host:" header for plaintext HTTP
      │
      ▼  dpi_types.py → sni_to_app_type()
 AppType (YOUTUBE, FACEBOOK, TIKTOK, DNS, HTTP, HTTPS, UNKNOWN ...)
@@ -166,12 +168,11 @@ is_blocked(src_ip, app_type, sni)?
 
 ### SNI extraction (the key insight)
 
-HTTPS is encrypted — but the very first packet of a TLS connection (the **Client Hello**) contains the target hostname in plaintext as the **Server Name Indication (SNI)** extension:
+HTTPS is encrypted — but the very first packet of a TLS connection (the **Client Hello**) contains the target hostname in plaintext as the **SNI** extension:
 
 ```
 TLS Record (byte 0 = 0x16 Handshake)
   └── Client Hello (byte 5 = 0x01)
-        ├── Version, Random, Session ID, Cipher Suites
         └── Extensions
               └── SNI Extension (type 0x0000)
                     └── "www.youtube.com"   ← extracted here
@@ -189,9 +190,9 @@ Each unique connection is identified by:
 | Destination Port | 443 |
 | Protocol | TCP (6) |
 
-All packets sharing a five-tuple belong to the same flow. Once a flow is classified and blocked, **all subsequent packets** of that flow are dropped — even before the SNI appears in later packets.
+All packets sharing a five-tuple belong to the same flow. Once blocked, **all subsequent packets** of that flow are dropped.
 
-### Supported blocking rules
+### Blocking rules
 
 | Rule | Flag | Example | What it blocks |
 |---|---|---|---|
@@ -199,65 +200,41 @@ All packets sharing a five-tuple belong to the same flow. Once a flow is classif
 | Source IP | `--block-ip` | `192.168.1.50` | All traffic from this IP |
 | Domain pattern | `--block-domain` | `tiktok` | Any SNI containing "tiktok" |
 
-### Detected application types
-
-`YOUTUBE`, `FACEBOOK`, `INSTAGRAM`, `TIKTOK`, `NETFLIX`, `AMAZON`, `GOOGLE`, `GITHUB`, `TWITTER`, `DISCORD`, `REDDIT`, `WIKIPEDIA`, `MICROSOFT`, `APPLE`, `CLOUDFLARE`, `TWITCH`, `HTTP`, `HTTPS`, `DNS`, `UNKNOWN`
-
 ---
 
 ## Extending the Project
 
-### Add a new app signature
-
-In `dpi_types.py`, add to `AppType` enum and `SNI_PATTERNS`:
+To add a new app (e.g. Spotify), open `dpi_types.py` and add:
 
 ```python
 class AppType(Enum):
     ...
-    NEWAPP = auto()
+    SPOTIFY = auto()
 
 SNI_PATTERNS = [
     ...
-    ("newapp.com", AppType.NEWAPP),
+    ("spotify", AppType.SPOTIFY),
+    ("scdn.co", AppType.SPOTIFY),
 ]
 ```
 
-### Add a new app to block
+Then block it with:
 
 ```bash
-python main.py input.pcap output.pcap --block-app NEWAPP
-
-
-Without any blocking (just analyze traffic):
--------------------------------------------------------
-bashpython main.py test_dpi.pcap output.pcap
-
-With blocking:
--------------------------------------------------------
-bash# Block by app
-python main.py test_dpi.pcap output.pcap --block-app YOUTUBE
-
-# Block multiple apps
-python main.py test_dpi.pcap output.pcap --block-app YOUTUBE --block-app TIKTOK
-
-# Block by IP
-python main.py test_dpi.pcap output.pcap --block-ip 192.168.1.50
-
-# Block by domain keyword
-python main.py test_dpi.pcap output.pcap --block-domain facebook
-
-# All combined
-python main.py test_dpi.pcap output.pcap --block-app YOUTUBE --block-app TIKTOK --block-ip 192.168.1.50 --block-domain facebook
-
+python main.py input.pcap output.pcap --block-app SPOTIFY
 ```
 
-### Use your own PCAP
+---
 
-Capture with Wireshark or `tcpdump`, then:
+## Use Your Own PCAP
+
+Capture traffic with Wireshark or `tcpdump`, then run:
 
 ```bash
 python main.py my_capture.pcap filtered.pcap --block-app TIKTOK
 ```
+
+Supports both little-endian and big-endian PCAP files automatically.
 
 ---
 
@@ -269,13 +246,6 @@ python main.py my_capture.pcap filtered.pcap --block-app TIKTOK
 | Protocol parsing | Manual byte offsets | `packet_parser.py` (same approach) |
 | SNI extraction | Byte-level TLS parser | `sni_extractor.py` (same approach) |
 | Flow tracking | `std::unordered_map` | Python `dict` with `FiveTuple` key |
-| Multi-threading | LB + FP thread pools | Single-threaded (mirrors `main_working.cpp`) |
+| Multi-threading | LB + FP thread pools | Single-threaded |
 | Blocking rules | `rule_manager.h` | `rule_manager.py` |
-| Output | PCAP + console report | Same |
 | Dependencies | `libpcap` | None (stdlib only) |
-
----
-
-## License
-
-Educational use. Based on [perryvegehan/Packet_analyzer](https://github.com/perryvegehan/Packet_analyzer).# Packet-Analyzer
